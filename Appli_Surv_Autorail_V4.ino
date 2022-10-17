@@ -8,7 +8,9 @@
   V4-0-1
 
   IDE 1.8.19, AVR boards 1.8.5, PC fixe
-	Le croquis utilise 82780 octets (32%), 1983 octets (27%) de mémoire dynamique
+	Le croquis utilise 82780 octets (32%), 1983 octets (24%) de mémoire dynamique
+  IDE 1.8.16, AVR boards 1.8.5, Arduino
+	Le croquis utilise 82862 octets (32%), 1983 octets (24%) de mémoire dynamique
 
     
   08/08/2020
@@ -193,7 +195,7 @@ int Magique = 16;
 #include <TimeAlarms.h>					// gestion des Alarmes
 #include <avr/wdt.h>						// watchdog uniquement pour Reset
 #include <ArduinoJson.h>
-#include "credentials_mqtt.h"
+#include <credentials_tpcf.h>
 #include <TinyGsmClient.h>
 #include <PubSubClient.h>
 /*  FONA_RX       2	==>     mega14 TX3
@@ -518,7 +520,7 @@ void setup() {
     tempapn.toCharArray(config.apn, (tempapn.length() + 1));
     tempUser.toCharArray(config.gprsUser, (tempUser.length() + 1));
     tempPass.toCharArray(config.gprsPass, (tempPass.length() + 1));
-    tempmqttServer.toCharArray(config.mqttServer, (tempmqttServer.length() + 1));
+    tempServer.toCharArray(config.mqttServer, (tempServer.length() + 1));
     tempmqttUserName.toCharArray(config.mqttUserName, (tempmqttUserName.length() + 1));
     tempmqttPass.toCharArray(config.mqttPass, (tempmqttPass.length() + 1));
     temptopic.toCharArray(config.writeTopic, (temptopic.length() + 1));
