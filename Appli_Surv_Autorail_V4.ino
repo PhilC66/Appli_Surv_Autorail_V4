@@ -8,7 +8,7 @@
   V4-0-1
 
   IDE 1.8.19, AVR boards 1.8.5, PC fixe
-	Le croquis utilise 82780 octets (32%), 1983 octets (24%) de mémoire dynamique
+	Le croquis utilise 82834 octets (32%), 2009 octets (24%) de mémoire dynamique
   IDE 1.8.16, AVR boards 1.8.5, Arduino
 	Le croquis utilise 82862 octets (32%), 1983 octets (24%) de mémoire dynamique
 
