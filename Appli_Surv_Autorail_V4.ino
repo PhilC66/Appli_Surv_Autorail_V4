@@ -1,16 +1,17 @@
 /*
   Telesurveillance Autorail V4
-  04/09/2022
+  
   Version SIM7600 sans utilisation MQTT natif
   base V4(ok en 4G hors mqtt)
   Refonte avec librairie TinyGSM revue PhC
   testé avec SIM7600G-H, SIM7600CE-T
-  V4-0-1
 
+  V4-0-1
+  31/10/2022 installé X4607 03/11/2022
   IDE 1.8.19, AVR boards 1.8.5, PC fixe
-	Le croquis utilise 82834 octets (32%), 2009 octets (24%) de mémoire dynamique
+	Le croquis utilise 81742 octets (32%), 2181 octets (26%) de mémoire dynamique
   IDE 1.8.16, AVR boards 1.8.5, Arduino
-	Le croquis utilise 82862 octets (32%), 1983 octets (24%) de mémoire dynamique
+	Le croquis utilise 81770 octets (32%), 2155 octets (26%) de mémoire dynamique
 
     
   08/08/2020
@@ -224,6 +225,8 @@ int Magique = 16;
 #define Op_PIR3				32				// Sortie Alimentation PIR1
 #define Op_PIR4				36				// Sortie Alimentation PIR2
 
+#define NTPServer "pool.ntp.org"
+
 /************ Global State (you don't need to change this!) ******************/
 // You don't need to change anything below this line!
 #define halt(s) { Serial.println(F( s )); while(1);  }
@@ -258,8 +261,6 @@ PubSubClient  mqtt(client);
 PhonebookEntry Phone;
 
 // #define Analyse_boucle // pour analyse temps de boucle
-
-// uint8_t readline(char *buff, uint8_t maxbuff, uint16_t timeout = 0);
 
 String  message;											//	Texte des SMS envoyé en reponse
 
@@ -457,16 +458,18 @@ void setup() {
   delay(500);
   digitalWrite(PowerKey,HIGH);
 
-  Serial.println(F("Wait..."));
-
   // Set GSM module baud rate
-  // pour nouvelle carte avant premiere utilsation faire AT+IPREX=19200
-  SerialAT.begin(19200);
+  // pour nouvelle carte avant premiere utilisation faire AT+IPREX=38400
+  // certaine cde comme ATI modeminfo ne fonctionne pas à 115200(val defaut usine),
+  // Ok à 57600, on garde une marge un cran en dessous = 38400 
+  SerialAT.begin(38400);
   Serial.println(F("Initializing modem..."));
-  delay(6000);  
+  unsigned long debut = millis();
+  while(!modem.init()){
+    delay(1000);
+    if(millis() - debut > 60000) break;
+  }
   // modem.restart();
-  modem.init();
-  
   Serial.print(F("Modem Info: "));
   Serial.println(modem.getModemInfo());
 
@@ -579,7 +582,6 @@ void setup() {
   digitalWrite(Op_PIR4, LOW);
 
   Serial.println(F("Lancement Application "));
-  Serial.println(F("Initialisation Module GSM...."));
   Serial.print(("Waiting for network..."));
   if (!modem.waitForNetwork()) {
     Serial.println(F(" fail"));
@@ -608,15 +610,13 @@ void setup() {
     AllumeCapteur();									// allumage des capteurs selon parametres
   }
 
-  // Print Modem info.
-  Serial.println(modem.getModemInfo());
 
   // VerifSIM();							// V2-14 verification si SIM et deverrouillage
 
   byte n;
   byte cpt = 0;
   do {												// boucle tant que reseau pas connecté
-    Alarm.delay(2000);
+    Alarm.delay(100);
     n = modem.getRegistrationStatus();
     cpt ++;
     if (cpt > 2) break;				// sortie si 2 tentatives demarrage sans reseau
@@ -634,7 +634,12 @@ void setup() {
   flushSerial();
   // Demande Operateur connecté
   Serial.print(F("Operateur :")), Serial.println(modem.getOperator());
-  modem.NTPServerSync(F("pool.ntp.org"),config.hete*4);// heure été par defaut
+
+  // Synchro heure réseau du modem
+  Serial.println(F("Synchro Heure réseau "));
+  if(SyncHeureModem(config.hete*4)){ // heure été par defaut
+    Serial.println(F("OK"));
+  } else {Serial.println(F("KO"));}  
   Serial.println(modem.getGSMDateTime(TinyGSMDateTimeFormat(0)));
 
   message = "";
@@ -652,7 +657,7 @@ void setup() {
 
   timesstatus();								// Etat synchronisation Heure Sys
   decodeGPS();									// Etat GPS
-  MajHeure();										// Mise à jour Date et Heure depuis GPS ou réseau
+  MajHeure();										// Mise à jour Date et Heure depuis réseau
 
   /* parametrage des Alarmes */
 
@@ -722,17 +727,17 @@ void loop() {
       *bufPtr = SerialAT.read();
       bufferrcpt += *bufPtr;
       Serial.write(*bufPtr);
-      Alarm.delay(1);
+      // Alarm.delay(1);
     } while ((*bufPtr++ != '\n') && (SerialAT.available()) && (++charCount < (sizeof(fonaInBuffer) - 1)));
     //Add a terminal NULL to the notification string
     *bufPtr = 0;
-    if (charCount > 1) {
+    // if (charCount > 1) {
       // Serial.print(F("Buffer ="));
       // Serial.println(bufferrcpt);
-    }
+    // }
     // Si appel entrant on raccroche
     if ((bufferrcpt.indexOf(F("RING"))) == 0) {	// RING, Ca sonne
-      //Serial.println(F("Ca sonne!!!!"));
+      // Serial.println(F("Ca sonne!!!!"));
       modem.callHangup();											// on raccroche
     }
     if ((bufferrcpt.indexOf(F("PSUTTZ"))) >= 0 ) { // V2-17 rattrapage si erreur mise à la date
@@ -740,11 +745,17 @@ void loop() {
       //FlagReset = true;	// on force redemarrage pour prendre la bonne date/time
       MajHeure();
     }
-    // Scan the notification string for an SMS received notification.
-    // If it's an SMS message, we'll get the slot number in 'slot'
-    if (1 == sscanf(fonaInBuffer, "+CMTI: \"SM\",%d", &slot)) {
+    if (bufferrcpt.indexOf(F("CMTI")) >= 0 ) { 
+      int p = bufferrcpt.indexOf(",");
+      slot = bufferrcpt.substring(p+1,bufferrcpt.length()).toInt();
+      // Serial.print(F(", SMS en reception:")),Serial.println(slot);
       traite_sms(slot);
     }
+    // Scan the notification string for an SMS received notification.
+    // If it's an SMS message, we'll get the slot number in 'slot'
+    // if (1 == sscanf(fonaInBuffer, "+CMTI: \"SM\",%d", &slot)) {
+    //   traite_sms(slot);
+    // }
   }
 
   if(!config.Intru && config.tracker && lancement){  
@@ -777,7 +788,7 @@ void loop() {
         // return
       } else {lastReconnectGPRSAttempt = 0;}
       if (modem.isGprsConnected()) {
-        Serial.println(F("GPRS reconnected"));
+        Serial.println(F(" GPRS reconnected"));
         AlarmeGprs = false;
       }
     }
@@ -990,7 +1001,7 @@ void Acquisition() {
   }
   // V1-12
   if (!config.Intru && config.tracker && lancement) {
-    mqttConnect(); // Call the loop to maintain connection to the server.
+    // mqttConnect(); // Call the loop to maintain connection to the server. SUPPRIMé Redondant
     gereCadence();
     static byte nalaGprs = 0;
     static byte nalaGps  = 0;
@@ -1025,12 +1036,13 @@ void Acquisition() {
         nalaMQTT = 0;
       }
     } else {
-      if (nalaMQTT > 0) {
-        nalaMQTT --;
-      } else {
+      // if (nalaMQTT > 0) {
+      //   nalaMQTT --;
+      // } else {
         FlagAlarmeMQTT = false;
         FlagAlarmeGprs = false;
-      }
+        nalaMQTT = 0;
+      // }
     }
   }
 
@@ -1400,7 +1412,7 @@ fin_tel:
 
         if (config.tracker){
           senddata(); // active localisation
-          Alarm.write(Send, config.tlent);
+          Alarm.write(Send, config.trapide);
           Accu = 255;
         }
         //if(!sms){//V2-14
@@ -1783,7 +1795,6 @@ FinLSTPOSPN:
       else if (smsstruct.message.indexOf(F("POSITION")) == 0) {	// demande position
         // on lance la demande au GPS
         if (decodeGPS()) {
-          // decodeGPS();
           //http://maps.google.fr/maps?f=q&hl=fr&q=42.8089900,2.2614000
           message += F("http://maps.google.fr/maps?f=q&hl=fr&q=");
           message += lat;
@@ -2201,6 +2212,11 @@ FinLSTPOSPN:
           sendSMSReply(smsstruct.sendernumber, sms);
         }
       }
+      else if (smsstruct.message.indexOf(F("MODEMINFO")) == 0){
+        // Get Modem Info
+        message += modem.getModemInfo();
+        sendSMSReply(smsstruct.sendernumber, sms);
+      }
       else {
         message += F("Commande non reconnue ?");		//"Commande non reconnue ?"
         sendSMSReply(smsstruct.sendernumber, sms);
@@ -2253,7 +2269,7 @@ void envoieGroupeSMS(byte grp) {
     envoie un SMS à tous les numero existant (9 max) du Phone Book
     de la liste restreinte config.Pos_Pn_PB[x]=1			*/
   // Serial.println(F("Envoie des SMS alarme"));
-  for (byte Index = 1; Index < 10; Index++) {		// Balayage des Num Tel Autorisés=dans Phone Book
+  for (byte Index = 1; Index < 10; Index++) {		// Balayage des Num Tel Autorisés=1 dans Phone Book
     Phone = {"",""};
     if(modem.readPhonebookEntry(&Phone, Index)){
       Serial.print(Index),Serial.print(","),Serial.println(Phone.number);
@@ -2482,7 +2498,7 @@ void MajHeure() {
     readmodemtime();	// lire l'heure du modem
     setTime(N_H,N_m, N_S, N_D, N_M, N_Y);	    // mise à l'heure de l'Arduino
     if(!HeureEte()){
-      modem.NTPServerSync(F("pool.ntp.org"),config.hhiver*4);
+      Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hhiver*4));
       readmodemtime();	// lire l'heure du modem
       setTime(N_H,N_m, N_S, N_D, N_M, N_Y);	    // mise à l'heure de l'Arduino
     }
@@ -2490,6 +2506,12 @@ void MajHeure() {
   }
   else {
     //  calcul décalage entre H sys et H reseau en s
+    // resynchroniser H modem avec reseau
+    if(HeureEte()){
+      Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hete*4));
+    } else {
+      Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hhiver*4));
+    }
     readmodemtime();	// lire l'heure du modem
     int ecart = (N_H - hour()) * 3600;
     ecart += (N_m - minute()) * 60;
@@ -2569,16 +2591,14 @@ void MessageFaussesAlarmes(byte sms) {
         message += fl;
         message += F("pas de RAZ");
       }
-      // supprimer sms index 1
       // envoyer à liste preferentielle config.Pos_Pn_PB[x] == 1
-      byte Index = 1;
-      Phone = {"",""};
-      modem.readPhonebookEntry(&Phone,Index);
-      sendSMSReply(Phone.number, true);
-      Index = 2;
-      Phone = {"",""};
-      if(modem.readPhonebookEntry(&Phone,Index)){ // lire Phone Book si index present
-        sendSMSReply(Phone.number, true);
+      for(int Index = 1; Index <10; Index ++){
+        if(config.Pos_Pn_PB[Index] == 1){
+          Phone = {"",""};
+          if(modem.readPhonebookEntry(&Phone,Index)){
+            sendSMSReply(Phone.number, true);
+          }
+        }
       }
     } else if (sms == 2){ // V4
       FausseAlarme1 = 0;
@@ -2663,7 +2683,7 @@ void OnceOnly() {
   }
   else {
     if (config.tracker) {
-      Alarm.write(Send, config.tlent);
+      Alarm.write(Send, config.trapide);
       senddata();
     }
   }
@@ -2909,36 +2929,6 @@ void AllumeCapteur() {		// allumage des capteurs selon parametres
   if (!config.PirActif[3]) {
     digitalWrite(Op_PIR4, LOW);
   }
-  // V2-18
-  // if(config.PirActif[0]){
-  // digitalWrite(Op_PIR1, HIGH);			// on allume les capteurs PIR TX et RX
-  // delay(200);
-  // }
-  // else{
-  // digitalWrite(Op_PIR1, LOW);				// on eteint
-  // }
-  // if(config.PirActif[1]){
-  // digitalWrite(Op_PIR2, HIGH);			// on allume les capteurs PIR TX et RX
-  // delay(200);
-  // }
-  // else{
-  // digitalWrite(Op_PIR2, LOW);
-  // }
-  // if(config.PirActif[2]){
-  // digitalWrite(Op_PIR3, HIGH);			// on allume les capteurs PIR TX et RX
-  // delay(200);
-  // }
-  // else{
-  // digitalWrite(Op_PIR3, LOW);
-  // }
-  // if(config.PirActif[3]){
-  // digitalWrite(Op_PIR4, HIGH);			// on allume les capteurs PIR TX et RX
-  // delay(200);
-  // }
-  // else{
-  // digitalWrite(Op_PIR4, LOW);
-  // }
-  // V2-18
 
   Alarm.delay(500);					 // on attend stabilisation des capteurs
 }
@@ -3154,32 +3144,33 @@ void gereVoyant() {
 }
 //---------------------------------------------------------------------------
 void senddata() {
-  decodeGPS();									// Lire GPS
-  char Sbidon[20];
-  sprintf(Sbidon, "%04d-%02d-%02d %02d:%02d:%02d", year(), month(), day(), hour(), minute(), second());
-  // {"Id":"BB63000","date_tx_sms":"2020-02-10 15:15:15","lat":42.123456,"lon":2.123456,"speed":25.2,"course":180}
+  if(decodeGPS()){									// Lire GPS
+    char bidon[20];
+    sprintf(bidon, "%04d-%02d-%02d %02d:%02d:%02d", year(), month(), day(), hour(), minute(), second());
+    // {"Id":"BB63000","date_tx_sms":"2020-02-10 15:15:15","lat":42.123456,"lon":2.123456,"speed":25.2,"course":180}
 
-  DynamicJsonDocument JsonDoc (164);
-  JsonDoc["Id"]          = config.Idchar;
-  JsonDoc["date_tx_sms"] = Sbidon;
-  JsonDoc["lat"]         = String(lat,6);
-  JsonDoc["lon"]         = String(lon,6);
-  JsonDoc["speed"]       = String(speed, 1);
-  JsonDoc["course"]      = String(heading, 0);
+    DynamicJsonDocument JsonDoc (164);
+    JsonDoc["Id"]          = config.Idchar;
+    JsonDoc["date_tx_sms"] = bidon;
+    JsonDoc["lat"]         = String(lat,6);
+    JsonDoc["lon"]         = String(lon,6);
+    JsonDoc["speed"]       = String(speed, 1);
+    JsonDoc["course"]      = String(heading, 0);
 
-  Serial.print(F("MQTT connecté:")),Serial.print(mqtt.connected());
-  Serial.print(F(", GPRS connecté :")),Serial.println(modem.isGprsConnected());
+    Serial.print(F("MQTT connecté:")),Serial.print(mqtt.connected());
+    Serial.print(F(", GPRS connecté :")),Serial.println(modem.isGprsConnected());
 
-  char JSONmessageBuffer[200];
-  serializeJson(JsonDoc, JSONmessageBuffer);
-  serializeJson(JsonDoc, Serial);
-  if(modem.isNetworkConnected() && modem.isGprsConnected() && mqtt.connected()){
-    if (! mqtt.publish(config.writeTopic,JSONmessageBuffer)) {// envoie data MQTT
-      Serial.println(F("mqtt connect Failed"));
-    } else {
-      Serial.println(F("mqtt connected"));
-      AlarmeMQTT = false;
-      AlarmeGprs = false;
+    char JSONmessageBuffer[200];
+    serializeJson(JsonDoc, JSONmessageBuffer);
+    serializeJson(JsonDoc, Serial);
+    if(modem.isNetworkConnected() && modem.isGprsConnected() && mqtt.connected()){
+      if (! mqtt.publish(config.writeTopic,JSONmessageBuffer)) {// envoie data MQTT
+        Serial.println(F("mqtt connect Failed"));
+      } else {
+        Serial.println(F("mqtt connected"));
+        AlarmeMQTT = false;
+        AlarmeGprs = false;
+      }
     }
   }
 }
@@ -3262,6 +3253,22 @@ bool Cherche_N_PB(String numero){ // Cherche numero dans PB
     }// else { idx = 10;}    
   }
   return false;
+}
+//---------------------------------------------------------------------------
+bool SyncHeureModem(int Savetime){
+  int rep = 1;
+  unsigned int debut = millis();
+  do{
+    rep = modem.NTPServerSync(NTPServer, Savetime);
+    Serial.print("NTP:"),Serial.println(modem.ShowNTPError(rep));
+    if (millis() - debut > 10000){
+      // echec Synchro, force date 01/08/2022 08:00:00, jour toujours circulé
+      modem.send_AT("+CCLK=\"22/08/01,08:00:00+08\"");
+      return false;
+    }
+    delay(500);
+  } while(rep != 0);
+  return true;
 }
 //---------------------------------------------------------------------------
 String ConnectedNetwork(){  
