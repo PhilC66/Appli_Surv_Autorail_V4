@@ -6,6 +6,19 @@
   Refonte avec librairie TinyGSM revue PhC
   testé avec SIM7600G-H, SIM7600CE-T
 
+  V4-0-2
+  25/11/2022 installé boitier test ancien X4573 réparé(new MEGA2560)
+  22/11/2022 installé X4607, X4573 boitier test
+  augmentation timeout mise à l'heure initiale
+  Relance Majheure sur reception +CNTP: 0
+  Revision Majheure, en cas de defaut NTP
+  revision Alarme MQTT
+
+  IDE 1.8.19, AVR boards 1.8.5, PC fixe
+	Le croquis utilise 81876 octets (32%), 2119 octets (25%) de mémoire dynamique
+  IDE 1.8.19, AVR boards 1.8.5, Raspi
+	Le croquis utilise 81904 octets (32%), 2093 octets (25%) de mémoire dynamique
+
   V4-0-1
   31/10/2022 installé X4607 03/11/2022
   IDE 1.8.19, AVR boards 1.8.5, PC fixe
@@ -184,7 +197,7 @@
 */
 #include <Arduino.h>
 
-const String ver = "V4-0-1";
+const String ver = "V4-0-2";
 int Magique = 16;
 
 #define TINY_GSM_MODEM_SIM7600
@@ -442,7 +455,8 @@ void IRQ_PIR4() {				// Detection PIR4
     }
   }
 }
-
+//---------------------------------------------------------------------------
+void MajHeure(bool force = false);
 //---------------------------------------------------------------------------
 void setup() {
   message.reserve(255);			 // texte des SMS
@@ -637,9 +651,9 @@ void setup() {
 
   // Synchro heure réseau du modem
   Serial.println(F("Synchro Heure réseau "));
-  if(SyncHeureModem(config.hete*4)){ // heure été par defaut
+  if(SyncHeureModem(config.hete*4, true)){ // heure été par defaut, first time
     Serial.println(F("OK"));
-  } else {Serial.println(F("KO"));}  
+  } else {Serial.println(F("KO"));}
   Serial.println(modem.getGSMDateTime(TinyGSMDateTimeFormat(0)));
 
   message = "";
@@ -657,7 +671,7 @@ void setup() {
 
   timesstatus();								// Etat synchronisation Heure Sys
   decodeGPS();									// Etat GPS
-  MajHeure();										// Mise à jour Date et Heure depuis réseau
+  MajHeure();										// Mise à jour Date et Heure systeme depuis réseau
 
   /* parametrage des Alarmes */
 
@@ -718,17 +732,17 @@ void loop() {
   // Traitement des messages non sollicté en provenance modem
   // Attente donnée en provenance SIM800/SIM7600
   String bufferrcpt;
-  char* bufPtr = fonaInBuffer;		//handy buffer pointer
+  char* bufPtr ;//= fonaInBuffer;		//handy buffer pointer
   if (SerialAT.available()>0) {   //any data available from the modem?
     byte slot = 0;            		//this will be the slot number of the SMS
-    int charCount = 0;
+    // int charCount = 0;
     //Read the notification into fonaInBuffer
     do  {
       *bufPtr = SerialAT.read();
       bufferrcpt += *bufPtr;
       Serial.write(*bufPtr);
       // Alarm.delay(1);
-    } while ((*bufPtr++ != '\n') && (SerialAT.available()) && (++charCount < (sizeof(fonaInBuffer) - 1)));
+    } while ((*bufPtr++ != '\n') && (SerialAT.available()) );// && (++charCount < (sizeof(fonaInBuffer) - 1)));
     //Add a terminal NULL to the notification string
     *bufPtr = 0;
     // if (charCount > 1) {
@@ -743,6 +757,10 @@ void loop() {
     if ((bufferrcpt.indexOf(F("PSUTTZ"))) >= 0 ) { // V2-17 rattrapage si erreur mise à la date
       Serial.println(F("Relance mise à l'heure !"));
       //FlagReset = true;	// on force redemarrage pour prendre la bonne date/time
+      MajHeure();
+    }
+    if ((bufferrcpt.indexOf(F("+CNTP: 0"))) >= 0 ) { // V4-0-2 si reception tardive relance majheure
+      Serial.println(F("Relance mise à l'heure !"));
       MajHeure();
     }
     if (bufferrcpt.indexOf(F("CMTI")) >= 0 ) { 
@@ -792,13 +810,16 @@ void loop() {
         AlarmeGprs = false;
       }
     }
-    if (!mqtt.connected()) {
-      Serial.println(F("=== MQTT NOT CONNECTED ===")); 
+    if (!mqtt.connected()) {      
       // Reconnect every 10 seconds
       if (millis() - lastReconnectMQTTAttempt > 10000L) {
+        Serial.println(F("=== MQTT NOT CONNECTED ==="));
         lastReconnectMQTTAttempt = millis();
         AlarmeMQTT = true;
-        if (mqttConnect()) { lastReconnectMQTTAttempt = 0; }
+        if (mqttConnect()) {
+          lastReconnectMQTTAttempt = millis();
+          AlarmeMQTT = false;
+          }
       }
       // delay(100);
       // return;
@@ -1035,6 +1056,7 @@ void Acquisition() {
         FlagAlarmeMQTT = true;
         nalaMQTT = 0;
       }
+      Serial.print(F("AlarmeMQTT: ")),Serial.println(nalaMQTT);
     } else {
       // if (nalaMQTT > 0) {
       //   nalaMQTT --;
@@ -1785,7 +1807,7 @@ FinLSTPOSPN:
           // Serial.print(_temp);
           modem.send_AT(_temp);
           Alarm.delay(100);
-          MajHeure();			// mise a l'heure
+          MajHeure(true);			// mise a l'heure forcée
         }
         else {
           message += F("pas de mise à l'heure en local");
@@ -2480,25 +2502,21 @@ void readmodemtime(){
   N_H 		= modemHDtate.substring(i - 2, i).toInt();
   N_m 		= modemHDtate.substring(i + 1, j).toInt();
   N_S 		= modemHDtate.substring(j + 1, j + 3).toInt();
-  // Serial.print("modemhdate:"),Serial.println(modemHDtate);
-  // char bidon[25];
-  // sprintf(bidon,"Modem %d/%d/%d %d:%d:%d\n",N_Y,N_M,N_D,N_H,N_m,N_S);
-  // Serial.print(bidon);
-  // setTime(N_H,N_m, N_S, N_D, N_M, N_Y);	// mise à l'heure de l'Arduino
-  // sprintf(bidon,"M5 %d/%d/%d %d:%d:%d\n",year(),month(),day(),hour(),minute(),second());
-  // Serial.print(bidon);
 }
 //---------------------------------------------------------------------------
-void MajHeure() {
+void MajHeure(bool force = false) {
+  // force = true, force mise à l'heure systeme sur heure modem, meme si defaut NTP
   static bool First = true;
   
   Serial.print(F("Mise a l'heure reguliere !, "));
   Serial.println(First);
   if (First) {															  // premiere fois apres le lancement
+    SyncHeureModem(config.hete*4, true);
     readmodemtime();	// lire l'heure du modem
     setTime(N_H,N_m, N_S, N_D, N_M, N_Y);	    // mise à l'heure de l'Arduino
     if(!HeureEte()){
-      Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hhiver*4));
+      // Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hhiver*4));
+      SyncHeureModem(config.hhiver*4, true);
       readmodemtime();	// lire l'heure du modem
       setTime(N_H,N_m, N_S, N_D, N_M, N_Y);	    // mise à l'heure de l'Arduino
     }
@@ -2508,9 +2526,15 @@ void MajHeure() {
     //  calcul décalage entre H sys et H reseau en s
     // resynchroniser H modem avec reseau
     if(HeureEte()){
-      Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hete*4));
+      // Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hete*4));
+      if(!SyncHeureModem(config.hete*4, false)){
+        if(!force)return; // sortie sans mise à l'heure, continue si forcé
+      }
     } else {
-      Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hhiver*4));
+      // Serial.print("NTP:"),Serial.println(modem.NTPServerSync(NTPServer, config.hhiver*4));
+      if(!SyncHeureModem(config.hhiver*4, false)){
+        if(!force)return; // sortie sans mise à l'heure, continue si forcé
+      }
     }
     readmodemtime();	// lire l'heure du modem
     int ecart = (N_H - hour()) * 3600;
@@ -2690,7 +2714,7 @@ void OnceOnly() {
   if (config.Pos_PN)envoieGroupeSMS(1);	//  envoie message etat apres lancement à liste pref
   if (!config.Intru && config.tracker) {
     Accu = 255;
-    Alarm.write(Send, config.tlent);
+    Alarm.write(Send, config.trapide);
     Alarm.delay(1000); // attendre envoie sms ci-dessus
     senddata();
   }
@@ -3255,20 +3279,27 @@ bool Cherche_N_PB(String numero){ // Cherche numero dans PB
   return false;
 }
 //---------------------------------------------------------------------------
-bool SyncHeureModem(int Savetime){
+bool SyncHeureModem(int Savetime, bool FirstTime){
   int rep = 1;
-  unsigned int debut = millis();
-  do{
-    rep = modem.NTPServerSync(NTPServer, Savetime);
-    Serial.print("NTP:"),Serial.println(modem.ShowNTPError(rep));
-    if (millis() - debut > 10000){
-      // echec Synchro, force date 01/08/2022 08:00:00, jour toujours circulé
-      modem.send_AT("+CCLK=\"22/08/01,08:00:00+08\"");
-      return false;
-    }
-    delay(500);
-  } while(rep != 0);
-  return true;
+  int compteur = 0;
+  if(modem.isNetworkConnected() && modem.isGprsConnected()){
+    do{
+      rep = modem.NTPServerSync(NTPServer, Savetime);
+      Serial.print("NTP:"),Serial.println(modem.ShowNTPError(rep));
+      if (compteur > 10){ // 10 tentatives
+        if(FirstTime){
+          // echec Synchro, force date 01/08/2022 08:00:00, jour toujours circulé
+          modem.send_AT("+CCLK=\"22/08/01,08:00:00+08\"");
+          delay(500);
+        }
+        return false;
+      }
+      compteur += 1;
+      delay(1000);
+    } while(rep != 0);
+    return true;
+  }
+  return false;
 }
 //---------------------------------------------------------------------------
 String ConnectedNetwork(){  
