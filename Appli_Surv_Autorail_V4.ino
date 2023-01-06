@@ -6,6 +6,19 @@
   Refonte avec librairie TinyGSM revue PhC
   testé avec SIM7600G-H, SIM7600CE-T
 
+  V4-0-3 installé 13/12/2022 X3944, X4573, X4607, 05/01/2023 X4545, X4554
+  08/12/2022
+  1- Patch si blocage modem CEREG = 4 (EUTRAN-BAND20 non affectée à free?), reset modem apres cptala defaut
+  2- Comptage et remonté dans message vie du nombre de reset modem
+  3- Commande SMS consultation nombre de reset modem
+  4- Historique changement reseau, recap dans SMS SignalVie et RAZ
+  5- Commande SMS lecture Histo reseau
+
+  IDE 1.8.19, AVR boards 1.8.5, PC fixe
+	Le croquis utilise 82882 octets (32%), 2097 octets (25%) de mémoire dynamique
+  IDE 1.8.19, AVR boards 1.8.5, Raspi
+	Le croquis utilise 82910 octets (32%), 2071 octets (25%) de mémoire dynamique
+
   V4-0-2
   25/11/2022 installé boitier test ancien X4573 réparé(new MEGA2560)
   22/11/2022 installé X4607, X4573 boitier test
@@ -197,7 +210,7 @@
 */
 #include <Arduino.h>
 
-const String ver = "V4-0-2";
+const String ver = "V4-0-3";
 int Magique = 16;
 
 #define TINY_GSM_MODEM_SIM7600
@@ -302,8 +315,6 @@ bool lancement          = false;    // passe a true apres lancement
 bool FlagReset 					= false;	  //	Reset demandé=True
 long TensionBatterie;									//	Tension Batterie solaire 12V
 
-byte Ntwk_dcx = 0;										//	compteur deconnexion reseau
-
 float   lat;													// latitude
 float   lon;													// longitude
 float   speed = 0.0;									// vitesse
@@ -325,6 +336,8 @@ int CoeffTensionDefaut = 3100;        // Coefficient par defaut
 int CoeffTension = CoeffTensionDefaut;// Coefficient calibration Tension relu en EEPROM
 int 		TmCptMax 	= 0;							// Temps de la boucle fausses alarme
 int     Nmax			= 0;							// Nombre de fausses alarmes avant alarme
+int NbrResetModem = 0;              // Nombre de fois reset modem, remise à 0 signal vie
+int Histo_Reseau[5]={0,0,0,0,0};    // Historique Reseau cumul chaque heure
 // V2-122
 
 struct  config_t 										// Structure configuration sauvée en EEPROM
@@ -778,20 +791,21 @@ void loop() {
 
   if(!config.Intru && config.tracker && lancement){  
     // Make sure we're still registered on the network
-    if (!modem.isNetworkConnected()) { // CGREG GPRS network registration status
-      Serial.println(F("Network disconnected"));
-      if (!modem.waitForNetwork(180000L, true)) {
-        Serial.println(F(" fail"));
-        // delay(10000);
-        // return;
-      }
-      if (modem.isNetworkConnected()) {
-        Serial.println(F("Network re-connected"));
-      }
-    }
+    // ne fonctionne pas si modem bloqué CGREG = 4
+    // if (!modem.isNetworkConnected()) { // CGREG GPRS network registration status
+    //   Serial.println(F("Network disconnected"));
+    //   if (!modem.waitForNetwork(180000L, true)) {
+    //     Serial.println(F(" fail"));
+    //     // delay(10000);
+    //     // return;
+    //   }
+    //   if (modem.isNetworkConnected()) {
+    //     Serial.println(F("Network re-connected"));
+    //   }
+    // }
 
 
-    // and make sure GPRS/EPS is still connected  
+    // and make sure GPRS/EPS is still connected
     if (!modem.isGprsConnected()) { // NETOPEN? Start TCPIP service
       Serial.println(F("GPRS disconnected!"));
       Serial.print(F("Connecting to "));
@@ -885,6 +899,21 @@ void Acquisition() {
   #endif
   // ************************ boucle acquisition  ***************************
   //	boucle acquisition
+  static int cptRegStatusFault = 0;
+  Serial.print(F("Connexion reseau:")),Serial.println(modem.isNetworkConnected());
+  Serial.print(F("Reg status      :")),Serial.println(modem.getRegistrationStatus());
+  Serial.print(F("Connexion GPRS  :")),Serial.println(modem.isGprsConnected());
+  // Patch Blocage modem
+  if(modem.getRegistrationStatus() != 1 && modem.getRegistrationStatus() != 5){
+    if(cptRegStatusFault ++ > config.cptAla){
+      cptRegStatusFault = 0;
+      NbrResetModem +=1;
+      Serial.println(F("Reset modem suite Reg status fault"));
+      modem.send_AT(F("+CRESET"));
+      delay(10000);
+    }
+  }
+
   Serial.print(F("speed=")), Serial.println(speed);
   displayTime(false);
   
@@ -1819,9 +1848,9 @@ FinLSTPOSPN:
         if (decodeGPS()) {
           //http://maps.google.fr/maps?f=q&hl=fr&q=42.8089900,2.2614000
           message += F("http://maps.google.fr/maps?f=q&hl=fr&q=");
-          message += lat;
+          message += String(lat,6);
           message += F(",");
-          message += lon;
+          message += String(lon,6);
           message += fl;
           message += F("Vitesse = ");
           message += String(speed, 1);
@@ -2239,6 +2268,16 @@ FinLSTPOSPN:
         message += modem.getModemInfo();
         sendSMSReply(smsstruct.sendernumber, sms);
       }
+      else if (smsstruct.message.indexOf(F("CPTRESETMODEM")) == 0){
+        // Demande nombre de reset modem
+        message += F("Compteur reset Modem : ");
+        message += String(NbrResetModem);
+        sendSMSReply(smsstruct.sendernumber, sms);
+      }else if (smsstruct.message.indexOf(F("NETWORKHISTO")) == 0){
+        // Demande Changement etat reseau
+        message_Monitoring_Reseau();
+        sendSMSReply(smsstruct.sendernumber, sms);
+      }
       else {
         message += F("Commande non reconnue ?");		//"Commande non reconnue ?"
         sendSMSReply(smsstruct.sendernumber, sms);
@@ -2279,31 +2318,38 @@ void envoie_alarme() {
     FlagLastAlarmeGps = FlagAlarmeGps;
   }
   if (SendEtat) { 							// si envoie Etat demandé
-    envoieGroupeSMS(0);					// envoie groupé
+    envoieGroupeSMS(0,false);		// envoie groupé
     SendEtat = false;						// efface demande
   }
 }
 //---------------------------------------------------------------------------
-void envoieGroupeSMS(byte grp) {
   /* si grp = 0,
     envoie un SMS à tous les numero existant (9 max) du Phone Book
     si grp = 1,
     envoie un SMS à tous les numero existant (9 max) du Phone Book
-    de la liste restreinte config.Pos_Pn_PB[x]=1			*/
-  // Serial.println(F("Envoie des SMS alarme"));
+    de la liste restreinte config.Pos_Pn_PB[x]=1			
+    
+    vie = true, ajoute au message nombre de reset modem */
+void envoieGroupeSMS(byte grp, bool vie) {
+
+  generationMessage();
+  if(vie){
+    message += F("Reset modem : ");
+    message += String(NbrResetModem);
+    message += fl;
+    message_Monitoring_Reseau();
+  }
   for (byte Index = 1; Index < 10; Index++) {		// Balayage des Num Tel Autorisés=1 dans Phone Book
     Phone = {"",""};
     if(modem.readPhonebookEntry(&Phone, Index)){
       Serial.print(Index),Serial.print(","),Serial.println(Phone.number);
       if(Phone.number.length() > 0){
         if (grp == 1){	// grp = 1 message liste restreinte
-          if (config.Pos_Pn_PB[Index] == 1) {
-            generationMessage();
+          if (config.Pos_Pn_PB[Index] == 1) {            
             message += F("lancement");
             sendSMSReply(Phone.number, true);
           }
         } else {	// grp = 0, message à tous
-          generationMessage();
           sendSMSReply(Phone.number , true);
         }        
       } else {
@@ -2313,8 +2359,8 @@ void envoieGroupeSMS(byte grp) {
   }
 }
 //---------------------------------------------------------------------------
+/* Generation du message etat/alarme général */
 void generationMessage() {
-  /* Generation du message etat/alarme général */
 
   messageId();
   if ( FlagAlarmeTension || FlagLastAlarmeTension || FlagAlarmeIntrusion
@@ -2489,7 +2535,6 @@ void read_RSSI() {	// lire valeur RSSI et remplir message
 }
 //---------------------------------------------------------------------------
 void readmodemtime(){
-  // mise à l'heure et calcul décalage entre H sys et H reseau en s
   String modemHDtate = modem.getGSMDateTime(TinyGSMDateTimeFormat(0));
   // convertir format date time yy/mm/dd,hh:mm:ss
   byte i 	= modemHDtate.indexOf("/");
@@ -2504,7 +2549,8 @@ void readmodemtime(){
   N_S 		= modemHDtate.substring(j + 1, j + 3).toInt();
 }
 //---------------------------------------------------------------------------
-void MajHeure(bool force = false) {
+void MajHeure(bool force = false) {  
+  Monitoring_Reseau();
   // force = true, force mise à l'heure systeme sur heure modem, meme si defaut NTP
   static bool First = true;
   
@@ -2711,7 +2757,7 @@ void OnceOnly() {
       senddata();
     }
   }
-  if (config.Pos_PN)envoieGroupeSMS(1);	//  envoie message etat apres lancement à liste pref
+  if (config.Pos_PN)envoieGroupeSMS(1,false);	//  envoie message etat apres lancement à liste pref
   if (!config.Intru && config.tracker) {
     Accu = 255;
     Alarm.write(Send, config.trapide);
@@ -2724,9 +2770,11 @@ void OnceOnly() {
 void SignalVie() {
   Serial.print(F("SignalVie "));
   displayTime(false);
-  // ************************ boucle signe de vie ***************************
-  Ntwk_dcx = 0;					// reset compteur deconnexion reseau
-  envoieGroupeSMS(0);		// envoie groupé
+  envoieGroupeSMS(0,true);		// envoie groupé
+  NbrResetModem = 0;          // reset compteur
+  for(byte i = 0; i<5;i++){
+    Histo_Reseau[i] = 0; // reset Historique changement reseau
+  }
   modem.deleteSmsMessage(0,4);// au cas ou, efface tous les SMS envoyé/reçu
 }
 //---------------------------------------------------------------------------
@@ -3305,13 +3353,45 @@ bool SyncHeureModem(int Savetime, bool FirstTime){
 String ConnectedNetwork(){  
   String network = "";
   int n = modem.getNetworkCurrentMode();
-  if(n==0){ network            = "not connect";}
-  else if(n>0 && n<4){network  = "2G";}
-  else if(n>=4 && n<8){network = "3G";}
-  else if(n==8){network        = "4G";}
-  else if(n==16){network       = "XLTE:CDMA&LTE";}
+  if(n==0){ network            = F("not connect");}
+  else if(n>0 && n<4){network  = F("2G");}
+  else if(n>=4 && n<8){network = F("3G");}
+  else if(n==8){network        = F("4G");}
+  else if(n==16){network       = F("XLTE:CDMA&LTE");}
   else {network = String(n);}
   return network;
+}
+//---------------------------------------------------------------------------
+/* Enregistre mode cnx Reseau
+  Histo-Reseau(0) = not connect, (1)=inconnu, (2)=2G, (3)=3G, (4)=4G 
+  cummul à chaque heure */
+void Monitoring_Reseau(){
+  int n = modem.getNetworkCurrentMode();
+  if(n==0){ Histo_Reseau[0]            ++ ;}
+  else if(n>0 && n<4){Histo_Reseau[2]  ++;}
+  else if(n>=4 && n<8){Histo_Reseau[3] ++;}
+  else if(n==8){Histo_Reseau[4]        ++;}
+  else {Histo_Reseau[1] ++;}
+}
+//---------------------------------------------------------------------------
+void message_Monitoring_Reseau(){
+  message += F("Histo Network Chgt : ");
+  message += fl;
+  message += F("not connect : ");
+  message += String(Histo_Reseau[0]);
+  message += fl;
+  message += F("inconnu : ");
+  message += String(Histo_Reseau[1]);
+  message += fl;
+  message += F("2G : ");
+  message += String(Histo_Reseau[2]);
+  message += fl;
+  message += F("3G : ");
+  message += String(Histo_Reseau[3]);
+  message += fl;
+  message += F("4G : ");
+  message += String(Histo_Reseau[4]);
+  message += fl;
 }
 /* --------------------  test seulement ----------------------*/
 void recvOneChar() {
