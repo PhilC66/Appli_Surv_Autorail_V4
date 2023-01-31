@@ -6,6 +6,14 @@
   Refonte avec librairie TinyGSM revue PhC
   testé avec SIM7600G-H, SIM7600CE-T
 
+  V4-0-4 31/01/2023
+  1- Renvoie sur liste restreinte message provenant d'un numéro < 8 chiffres (N° Free)
+  
+  IDE 1.8.19, AVR boards 1.8.6, PC fixe
+	Le croquis utilise 82794 octets (32%), 2097 octets (25%) de mémoire dynamique
+  IDE 1.8.19, AVR boards 1.8.6, Raspi
+	Le croquis utilise 83166 octets (32%), 2071 octets (25%) de mémoire dynamique
+
   V4-0-3 installé 13/12/2022 X3944, X4573, X4607, 05/01/2023 X4545, X4554
   08/12/2022
   1- Patch si blocage modem CEREG = 4 (EUTRAN-BAND20 non affectée à free?), reset modem apres cptala defaut
@@ -210,7 +218,7 @@
 */
 #include <Arduino.h>
 
-const String ver = "V4-0-3";
+const String ver = "V4-0-4";
 int Magique = 16;
 
 #define TINY_GSM_MODEM_SIM7600
@@ -1146,6 +1154,27 @@ void traite_sms(int slot) {	// traitement du SMS par slot
       Serial.print(F("Nom appelant:")), Serial.println(nomAppelant);
       
     } else {smsstruct.message = String(message);}
+      if(Phone.number.length() < 8){ // numero service free
+        for (byte Index = 1; Index < 10; Index++) { // Balayage des Num Tel dans Phone Book
+          Phone = {"",""};
+          if(modem.readPhonebookEntry(&Phone, Index)){
+            if(Phone.number.length() > 0){
+              if (config.Pos_Pn_PB[Index] == 1) { // Num dans liste restreinte            
+                message = smsstruct.message;
+                sendSMSReply(Phone.number , true);
+                if (modem.deleteSmsMessage(slot,0)) {
+                  Serial.print(F("message supprime, slot=")), Serial.println(slot);
+                } else {
+                  Serial.print(F("Impossible de supprimer slot=")), Serial.println(slot);
+                  modem.deleteSmsMessage(0,4); // efface tous les sms
+                }
+                return; // sortir de la procedure traite_sms
+              }
+            } else {Index = 10;}
+          }
+        }
+      }
+    
     Serial.print(F("texte du SMS :")), Serial.println(smsstruct.message);
     // for (byte i = 0; i < smsstruct.message.length(); i++) {
       // if ((int)smsstruct.message[i] < 0 || (int)smsstruct.message[i] > 127) { // caracteres accentués interdit
@@ -1155,9 +1184,10 @@ void traite_sms(int slot) {	// traitement du SMS par slot
     /* Suppression du SMS */
     if (sms) {
       if (modem.deleteSmsMessage(slot,0)) {
-        Serial.print(F("OK! message supprime, slot=")), Serial.println(slot);
+        Serial.print(F("message supprime, slot=")), Serial.println(slot);
       } else {
         Serial.print(F("Impossible de supprimer slot=")), Serial.println(slot);
+        modem.deleteSmsMessage(0,4); // efface tous les sms
       }
     }
     if ((sms && nomAppelant.length() > 0) || !sms) { // nom appelant existant
