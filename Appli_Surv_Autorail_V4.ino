@@ -6,6 +6,18 @@
   Refonte avec librairie TinyGSM revue PhC
   testé avec SIM7600G-H, SIM7600CE-T
 
+  V4-0-5 26/11/2023 installé SPARE
+  pour nouveau capteurs Alarme
+  ok vérifier Comptage alarme >= Nmax Démarrer le comptage du nombre de coup à 1
+  ok Supprimer la salve de démarrage des capteurs
+  ok vérifier presentation log
+  bug message console locale dans traite_sms
+  
+  IDE 1.8.19, AVR boards 1.8.6, PC fixe
+	Le croquis utilise 82270 octets (32%), 2115 octets (25%) de mémoire dynamique
+  IDE 1.8.19, AVR boards 1.8.6, Raspi
+	Le croquis utilise 82298 octets (32%), 2089 octets (25%) de mémoire dynamique
+
   V4-0-4 31/01/2023
   1- Renvoie sur liste restreinte message provenant d'un numéro < 8 chiffres (N° Free)
   
@@ -60,6 +72,9 @@
 
 	----------------------------------------------
 	evolution futur
+
+  Démarrage GPS sans que le tracker soit lancé ???
+  
 	----------------------------------------------
 
   V4-0 08/08/2022 installé X4607
@@ -154,7 +169,7 @@
 	X4545 le 03/10/2017
 	X4573 le 04/10/2017
   1- Allumage voyants de controle Alarme dans la boucle ne permet pas de voir les alarmes courtes,
-		 bien quelle soit comptabilisé correctement
+	   bien quelle soit comptabilisé correctement
 		 ajout dans les IRQ allumage du voyant Led_PIRX
   2- bloquage au demarrage si batterie lipo faible, reste bloqué sur while(1)
 		 remplacé par softreset tente de redemarrer jusqu'a ce que la batterie soit rechargée
@@ -218,7 +233,7 @@
 */
 #include <Arduino.h>
 
-const String ver = "V4-0-4";
+const String ver = "V4-0-5";
 int Magique = 16;
 
 #define TINY_GSM_MODEM_SIM7600
@@ -864,7 +879,7 @@ void AnalyseAlarme() {
       if (!timerlance)timerlance = true;				// on lance le timer si pas deja fait
       timecompte ++;	// on incremente le compteur temps Alarme
 
-      if ((CptAlarme1 > Nmax || CptAlarme2 > Nmax || CptAlarme3 > Nmax || CptAlarme4 > Nmax) && timecompte < TmCptMax) {		// Alarme validée V2-122
+      if ((CptAlarme1 >= Nmax || CptAlarme2 >= Nmax || CptAlarme3 >= Nmax || CptAlarme4 >= Nmax) && timecompte < TmCptMax) {		// Alarme validée V2-122
         FlagPIR = true;
         timecomptememo = timecompte;	// V2-20
       }
@@ -1153,7 +1168,6 @@ void traite_sms(int slot) {	// traitement du SMS par slot
       nomAppelant = Phone.text;
       Serial.print(F("Nom appelant:")), Serial.println(nomAppelant);
       
-    } else {smsstruct.message = String(message);}
       if(Phone.number.length() < 8){ // numero service free
         for (byte Index = 1; Index < 10; Index++) { // Balayage des Num Tel dans Phone Book
           Phone = {"",""};
@@ -1174,6 +1188,9 @@ void traite_sms(int slot) {	// traitement du SMS par slot
           }
         }
       }
+    } else {
+      smsstruct.message = String(message); // message console locale
+    }
     
     Serial.print(F("texte du SMS :")), Serial.println(smsstruct.message);
     // for (byte i = 0; i < smsstruct.message.length(); i++) {
@@ -1690,6 +1707,7 @@ FinLSTPOSPN:
             config.Nuit_Nmax 		 = k;
             config.Nuit_TmCptMax = l; //passage en s
             sauvConfig();													// sauvegarde en EEPROM V2-12
+            AIntru_HeureActuelle();
           }
         }
         message += F("Parametres Fausses Alarmes");
@@ -2929,108 +2947,39 @@ bool decodeGPS() {
 }
 //---------------------------------------------------------------------------
 void logRecord(String nom, String action) { // renseigne log et enregistre EEPROM
-  static int index = 0;
-  String temp;
-  if (month() < 10) {
-    temp =  "0" + String(month());
+/* décalage du tableau
+  copie 3>4,2>3,1>2,0>1
+  nouvelle valeur en 0
+*/
+  for(int index = 3;index > -1;index --){
+    strcpy(record[index+1].Act, record[index].Act);
+    strcpy(record[index+1].dt, record[index].dt);
+    strcpy(record[index+1].Name, record[index].Name);
   }
-  else {
-    // temp =  "0";	//V2-18
-    temp = String(month());	//V2-18
-  }
-  if (day() < 10 ) {
-    temp += "0" + String(day());
-  }
-  else {
-    temp += String(day());
-  }
-  if (hour() < 10) {
-    temp += "-0" + String(hour());
-  }
-  else {
-    temp += "-" + String(hour());
-  }
-  if (minute() < 10) {
-    temp += "0" + String(minute());
-  }
-  else {
-    temp += String(minute());
-  }
-  temp  .toCharArray(record[index].dt, 10);
-  nom   .toCharArray(record[index].Name, 15);
-  action.toCharArray(record[index].Act, 2);
+  sprintf(record[0].dt, "%02d%02d-%02d%02d", month(), day(), hour(), minute());
+  nom   .toCharArray(record[0].Name, 15);
+  action.toCharArray(record[0].Act, 2);
 
   int longueur = EEPROM_writeAnything(EEPROM_adresse[1], record);// enregistre en EEPROM
-
-  if (index < 4) {
-    index ++;
-  }
-  else {
-    index = 0;
-  }
 }
 //---------------------------------------------------------------------------
 void AllumeCapteur() {		// allumage des capteurs selon parametres
 
-  // V2-18
-  for (int i = 0; i < 10; i++) {
-    if (config.PirActif[0]) {
-      digitalWrite(Op_PIR1, HIGH);
-    }
-    if (config.PirActif[1]) {
-      digitalWrite(Op_PIR2, HIGH);
-    }
-    if (config.PirActif[2]) {
-      digitalWrite(Op_PIR3, HIGH);
-    }
-    if (config.PirActif[3]) {
-      digitalWrite(Op_PIR4, HIGH);
-    }
-    Alarm.delay(400);
-    if (config.PirActif[0]) {
-      digitalWrite(Op_PIR1, LOW);
-    }
-    if (config.PirActif[1]) {
-      digitalWrite(Op_PIR2, LOW);
-    }
-    if (config.PirActif[2]) {
-      digitalWrite(Op_PIR3, LOW);
-    }
-    if (config.PirActif[3]) {
-      digitalWrite(Op_PIR4, LOW);
-    }
-    if ((i % 5) == 0) {
-      Alarm.delay(500);
-    }
-    else {
-      Alarm.delay(100);
-    }
-  }
   if (config.PirActif[0]) {
     digitalWrite(Op_PIR1, HIGH);
-  }
+  } else {digitalWrite(Op_PIR1, LOW);}
+
   if (config.PirActif[1]) {
     digitalWrite(Op_PIR2, HIGH);
-  }
+  } else {digitalWrite(Op_PIR2, LOW);}
+
   if (config.PirActif[2]) {
     digitalWrite(Op_PIR3, HIGH);
-  }
+  } else {digitalWrite(Op_PIR3, LOW);}
+
   if (config.PirActif[3]) {
     digitalWrite(Op_PIR4, HIGH);
-  }
-
-  if (!config.PirActif[0]) {
-    digitalWrite(Op_PIR1, LOW);
-  }
-  if (!config.PirActif[1]) {
-    digitalWrite(Op_PIR2, LOW);
-  }
-  if (!config.PirActif[2]) {
-    digitalWrite(Op_PIR3, LOW);
-  }
-  if (!config.PirActif[3]) {
-    digitalWrite(Op_PIR4, LOW);
-  }
+  } else {digitalWrite(Op_PIR4, LOW);}
 
   Alarm.delay(500);					 // on attend stabilisation des capteurs
 }
