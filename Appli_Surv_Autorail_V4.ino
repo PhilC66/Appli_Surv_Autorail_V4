@@ -6,7 +6,7 @@
   Refonte avec librairie TinyGSM revue PhC
   testé avec SIM7600G-H, SIM7600CE-T
 
-  V4-0-5 26/11/2023 installé SPARE
+  V4-0-5 26/11/2023 installé SPARE,28/11/2023: X4545,X4554,X4573,X4607,X3944
   pour nouveau capteurs Alarme
   ok vérifier Comptage alarme >= Nmax Démarrer le comptage du nombre de coup à 1
   ok Supprimer la salve de démarrage des capteurs
