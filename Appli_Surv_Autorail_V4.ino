@@ -6,6 +6,16 @@
   Refonte avec librairie TinyGSM revue PhC
   testé avec SIM7600G-H, SIM7600CE-T
 
+  V4-0-6 08/05/2024
+  Tempo allumage capteur, valeur en parametre
+  nouveau magic
+
+  IDE 1.8.19, AVR boards 1.8.6, PC fixe 
+	Le croquis utilise 82610 octets (32%), 2117 octets (25%) de mémoire dynamique VSCODE
+  Le croquis utilise 82620 octets (32%), 2117 octets (25%) de mémoire dynamique IDE Arduino
+  IDE 1.8.19, AVR boards 1.8.6, Raspi
+	Le croquis utilise 82648 octets (32%), 2091 octets (25%) de mémoire dynamique
+
   V4-0-5 26/11/2023 installé SPARE,28/11/2023: X4545,X4554,X4573,X4607,X3944
   pour nouveau capteurs Alarme
   ok vérifier Comptage alarme >= Nmax Démarrer le comptage du nombre de coup à 1
@@ -233,15 +243,15 @@
 */
 #include <Arduino.h>
 
-const String ver = "V4-0-5";
-int Magique = 16;
+const String ver = "V4-0-6";
+int Magique = 17;
 
 #define TINY_GSM_MODEM_SIM7600
 
 #include "defs.h"
 #include <EEPROM.h>							// variable en EEPROM
 #include <EEPROMAnything.h>			// variable en EEPROM
-#include <Time.h>								// gestion Heure
+// #include <Time.h>								// gestion Heure
 #include <TimeAlarms.h>					// gestion des Alarmes
 #include <avr/wdt.h>						// watchdog uniquement pour Reset
 #include <ArduinoJson.h>
@@ -400,6 +410,7 @@ struct  config_t 										// Structure configuration sauvée en EEPROM
   byte    cptAla;                   // Compteur alarmes Tracker avant declenchement
   int     hete;                     // decalage Heure été UTC
   int     hhiver;                   // decalage Heure hiver UTC
+  int     tempoCapteur;             // tempo attente apres allumage capteur ms
 } config;
 
 byte EEPROM_adresse[3] = {0, 20, 170}; // Adresse EEPROM 0:coefftension,1:log,2:config
@@ -570,6 +581,7 @@ void setup() {
     config.cptAla           = 10; // 11*Acquisition time
     config.hete             = 2; // heure
     config.hhiver           = 1; // heure
+    config.tempoCapteur     = 2000; // tempo en ms
     tempapn.toCharArray(config.apn, (tempapn.length() + 1));
     tempUser.toCharArray(config.gprsUser, (tempUser.length() + 1));
     tempPass.toCharArray(config.gprsPass, (tempPass.length() + 1));
@@ -2321,9 +2333,26 @@ FinLSTPOSPN:
         message += F("Compteur reset Modem : ");
         message += String(NbrResetModem);
         sendSMSReply(smsstruct.sendernumber, sms);
-      }else if (smsstruct.message.indexOf(F("NETWORKHISTO")) == 0){
+      }
+      else if (smsstruct.message.indexOf(F("NETWORKHISTO")) == 0){
         // Demande Changement etat reseau
         message_Monitoring_Reseau();
+        sendSMSReply(smsstruct.sendernumber, sms);
+      }
+      else if (smsstruct.message.indexOf(F("TEMPOCAPTEUR")) == 0){
+        // Temporisation Capteur
+        if (smsstruct.message.indexOf(char(61)) == 12) {
+          int c = smsstruct.message.substring(13).toInt();
+          if (c >= 0 && c <= 600001) {
+            config.tempoCapteur = c;
+            sauvConfig();
+          }
+        }
+        message += F("Temporisation Capteurs");
+        message += fl;
+        message += F("au demarrage = ");
+        message += String(config.tempoCapteur);
+        message += "ms" + fl;
         sendSMSReply(smsstruct.sendernumber, sms);
       }
       else {
@@ -2980,8 +3009,9 @@ void AllumeCapteur() {		// allumage des capteurs selon parametres
   if (config.PirActif[3]) {
     digitalWrite(Op_PIR4, HIGH);
   } else {digitalWrite(Op_PIR4, LOW);}
-
-  Alarm.delay(500);					 // on attend stabilisation des capteurs
+  Serial.println(F("début tempocapteur"));
+  Alarm.delay(config.tempoCapteur);					 // on attend stabilisation des capteurs
+  Serial.println(F("fin tempocapteur"));
 }
 //--------------------------------------------------------------------------------//
 int moyenneAnalogique() {	// calcul moyenne 10 mesures consécutives
@@ -3056,6 +3086,7 @@ void PrintEEPROM() {
   Serial.print(F("config.IntruDebut = "))		, Serial.println(config.IntruDebut);
   Serial.print(F("config.Nuit_TmCptMax = ")), Serial.println(config.Nuit_TmCptMax);
   Serial.print(F("config.Nuit_Nmax = "))		, Serial.println(config.Nuit_Nmax);
+  Serial.print(F("Tempo Capteurs (ms) = "))	, Serial.println(config.tempoCapteur);
   Serial.print(F("CoeffTension = "))	      , Serial.println(CoeffTension);
   Serial.print(F("apn = "))                 , Serial.println(config.apn);
   Serial.print(F("gprsUser = "))            , Serial.println(config.gprsUser);
