@@ -3010,7 +3010,7 @@ void AllumeCapteur() {		// allumage des capteurs selon parametres
     digitalWrite(Op_PIR4, HIGH);
   } else {digitalWrite(Op_PIR4, LOW);}
   Serial.println(F("début tempocapteur"));
-  Alarm.delay(config.tempoCapteur);					 // on attend stabilisation des capteurs
+  delay(config.tempoCapteur);					 // on attend stabilisation des capteurs
   Serial.println(F("fin tempocapteur"));
 }
 //--------------------------------------------------------------------------------//
