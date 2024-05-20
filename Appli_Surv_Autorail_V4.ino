@@ -6,7 +6,9 @@
   Refonte avec librairie TinyGSM revue PhC
   testé avec SIM7600G-H, SIM7600CE-T
 
-  V4-0-6 08/05/2024
+  ATTENTION version de credentials_tpcf.h
+  
+  V4-0-6 08/05/2024 installé 19/05/2024 SPARE, X4545, X4573
   Tempo allumage capteur, valeur en parametre
   nouveau magic
 
