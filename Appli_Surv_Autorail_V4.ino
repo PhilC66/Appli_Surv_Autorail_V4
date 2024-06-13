@@ -8,6 +8,15 @@
 
   ATTENTION version de credentials_tpcf.h
   
+  V4-0-7 13/06/2024
+  RAZ des compteurs alarme au démarrage des capteurs
+
+  IDE 1.8.19, AVR boards 1.8.6, PC fixe 
+	Le croquis utilise 82622 octets (32%), 2117 octets (25%) de mémoire dynamique VSCODE
+  Le croquis utilise 82632 octets (32%), 2117 octets (25%) de mémoire dynamique IDE Arduino
+  IDE 1.8.19, AVR boards 1.8.6, Raspi
+	Le croquis utilise 82660 octets (32%), 2091 octets (25%) de mémoire dynamique
+
   V4-0-6 08/05/2024 installé 19/05/2024 SPARE, X4545, X4573
   Tempo allumage capteur, valeur en parametre
   nouveau magic
@@ -245,7 +254,7 @@
 */
 #include <Arduino.h>
 
-const String ver = "V4-0-6";
+const String ver = "V4-0-7";
 int Magique = 17;
 
 #define TINY_GSM_MODEM_SIM7600
@@ -3011,9 +3020,13 @@ void AllumeCapteur() {		// allumage des capteurs selon parametres
   if (config.PirActif[3]) {
     digitalWrite(Op_PIR4, HIGH);
   } else {digitalWrite(Op_PIR4, LOW);}
-  Serial.println(F("début tempocapteur"));
+  // Serial.println(F("début tempocapteur"));
+  // RAZ tous les compteurs alarme
+  FausseAlarme1 = FausseAlarme2 = FausseAlarme3 = FausseAlarme4 = 0;
+  CptAlarme1 = CptAlarme2 = CptAlarme3 = CptAlarme4 = 0;
+  FausseAlarme1 = FausseAlarme2 = FausseAlarme3 = FausseAlarme4 = 0;
   delay(config.tempoCapteur);					 // on attend stabilisation des capteurs
-  Serial.println(F("fin tempocapteur"));
+  // Serial.println(F("fin tempocapteur"));
 }
 //--------------------------------------------------------------------------------//
 int moyenneAnalogique() {	// calcul moyenne 10 mesures consécutives
